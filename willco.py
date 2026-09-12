@@ -1,8 +1,10 @@
 import os
+import time
 import cot_reports as cot
 import pandas as pd
 import numpy as np
 import datetime
+import requests
 
 class WillCo:
 
@@ -50,13 +52,34 @@ class WillCo:
             dtype=self.CSV_DTYPES
         )
 
+    def _cot_year_with_retry(self, year, cot_report_type='legacy_fut', attempts=5):
+        """Download one COT year with retries for transient network failures."""
+        delay = 2.0
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return pd.DataFrame(cot.cot_year(year, cot_report_type=cot_report_type))
+            except (requests.exceptions.RequestException, ConnectionError, OSError, TimeoutError) as exc:
+                last_error = exc
+                if attempt == attempts:
+                    break
+                print(
+                    f"COT download for {year} failed (attempt {attempt}/{attempts}): {exc!r}; "
+                    f"retrying in {delay:.0f}s..."
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, 60.0)
+        raise RuntimeError(f"Failed to download COT data for {year} after {attempts} attempts") from last_error
+
     def fetch_and_store_cot_data(self):
         end_year = int(datetime.date.today().strftime('%Y')) + 1
         begin_year = end_year - 7
         yearly_frames = []
         for i in reversed(range(begin_year, end_year)):
-            single_year = pd.DataFrame(cot.cot_year(i, cot_report_type='legacy_fut')) 
+            single_year = self._cot_year_with_retry(i, cot_report_type='legacy_fut')
             yearly_frames.append(single_year)
+            # Brief pause between years to reduce CFTC connection resets under load.
+            time.sleep(1.0)
         df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else pd.DataFrame()
 
         df = df.rename(columns=lambda x: x.replace(' ', '_').replace('-', '_').replace('(', '_').replace(')', '_').lower())
