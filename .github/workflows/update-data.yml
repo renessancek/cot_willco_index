@@ -33,7 +33,18 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run build script
-        run: python build.py
+        # Whole-step retry for transient CFTC connection resets (see willco.py per-year retries).
+        run: |
+          set -e
+          for attempt in 1 2 3; do
+            if python build.py; then
+              exit 0
+            fi
+            echo "build.py failed (attempt ${attempt}/3); waiting before retry..."
+            sleep $((attempt * 30))
+          done
+          echo "build.py failed after 3 attempts"
+          exit 1
 
       - name: Commit and push changes
         run: |
